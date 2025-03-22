@@ -1,0 +1,13 @@
+0
+electrodermal_activity
+temperature
+hour
+minute
+second
+day_of_week
+hr_rolling_mean
+hr_rolling_std
+eda_rolling_mean
+eda_rolling_std
+temp_rolling_mean
+temp_rolling_std
