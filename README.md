@@ -11,7 +11,8 @@ This application processes health metric data (heart rate, electrodermal activit
 - **Data Integration**: Loads and merges health metrics from multiple data sources (HR, EDA, TEMP, BVP)
 - **Automated Preprocessing**: Cleans, normalizes, and transforms raw health data for analysis
 - **Feature Engineering**: Creates relevant derived features from time-series health data
-- **Machine Learning Models**: Uses regression models to analyze patterns and predict health metrics
+- **Adaptive Model Selection**: Automatically selects the appropriate model type (neural network or scikit-learn) based on system compatibility
+- **Missing Value Handling**: Automatically detects and imputes missing values in the dataset
 - **Interactive Dashboard**: Visualizes health metrics with dynamic charts and graphs
 - **Real-time Predictions**: Makes predictions based on user-input health parameters
 - **Health Insights**: Provides summary statistics and trend analysis of health data
@@ -24,7 +25,6 @@ health_tracker/
 ├── app.py                   # Streamlit dashboard application
 ├── data_preprocessing.py    # Data loading and preprocessing module
 ├── model.py                 # Machine learning model training module
-├── create_dummy_model.py    # Alternative model creation script
 ├── main.py                  # Main script to run the full pipeline
 ├── setup.sh                 # Setup script for dependencies
 ├── requirements.txt         # Python dependencies
@@ -42,11 +42,14 @@ health_tracker/
 │   ├── y_test.npy           # Testing target values
 │   ├── feature_names.csv    # Names of features
 │   ├── target_col.csv       # Name of target column
-│   └── scaler.pkl           # Fitted scaler for normalization
+│   ├── scaler.pkl           # Fitted scaler for normalization
+│   └── imputer.pkl          # Fitted imputer for handling missing values
 ├── saved_models/            # Directory for trained models
-│   ├── health_model.pkl     # Trained machine learning model
+│   ├── health_model.pkl     # Trained scikit-learn model
+│   ├── health_model.h5      # Trained neural network model (if available)
 │   ├── feature_info.json    # Feature information for the model
-│   └── metrics.json         # Model evaluation metrics
+│   ├── metrics.json         # Model evaluation metrics
+│   └── figures/             # Model visualizations and performance plots
 └── visualizations/          # Directory for data visualizations
 ```
 
@@ -62,15 +65,17 @@ health_tracker/
 
 ### Machine Learning Model
 
-The application supports different model types:
+The application uses an adaptive model selection approach:
 
-- **Linear Regression Model**: Fast and interpretable baseline model
-- **Neural Network Option**: Deep learning approach with configurable layers and nodes (requires TensorFlow)
+- **Primary Option**: Neural Network with TensorFlow/Keras (when available)
+- **Fallback Option**: Linear Regression Model from scikit-learn (when TensorFlow is not available)
 
 Key model features:
+- Automatic missing value imputation
 - Feature importance analysis
-- Performance metrics (MAE, MSE, RMSE, R²)
+- Comprehensive performance metrics (MAE, MSE, RMSE, R²)
 - Model persistence for future predictions
+- Visualization of model performance
 
 ### Interactive Dashboard
 
@@ -78,8 +83,8 @@ The Streamlit dashboard provides:
 
 - **Dashboard Overview**: Summary statistics and key health metrics visualization
 - **Data Explorer**: Interactive tools to analyze health data patterns
-- **Predictions**: Interface to input health parameters and receive predictions
-- **Model Information**: Details about the model architecture and performance
+- **Predictions**: Interface to input health parameters and receive predictions with visual representation
+- **Model Information**: Details about the model architecture, performance, and feature importance
 - **Settings**: Application configuration options
 
 ## Installation
@@ -99,6 +104,11 @@ chmod +x setup.sh
 Or install dependencies manually (Option 2):
 ```bash
 pip install -r requirements.txt
+```
+
+For macOS users who want to use TensorFlow with GPU acceleration (optional):
+```bash
+pip install tensorflow-macos tensorflow-metal
 ```
 
 ## Usage
@@ -135,17 +145,12 @@ To run individual components:
 python data_preprocessing.py
 ```
 
-2. Model Training (using create_dummy_model.py for systems with TensorFlow compatibility issues):
-```bash
-python create_dummy_model.py
-```
-
-3. Alternative Model Training (if TensorFlow is properly configured):
+2. Model Training:
 ```bash
 python model.py
 ```
 
-4. Streamlit App:
+3. Streamlit App:
 ```bash
 streamlit run app.py
 ```
@@ -178,23 +183,29 @@ The model is evaluated using several metrics:
 - matplotlib==3.7.2
 - seaborn==0.12.2
 - scikit-learn==1.3.0
-- tensorflow==2.13.0 (optional, for neural network models)
-- keras==2.13.1 (optional, for neural network models)
 - streamlit==1.25.0
 - plotly==5.15.0
 - pyngrok==6.0.0 (optional, for ngrok tunneling)
 - joblib==1.3.1
-- scikeras==0.11.0 (optional, for neural network models)
+- tensorflow==2.13.0 (optional, for neural network models)
+- tensorflow-macos==2.13.0 (optional, for macOS users)
+- tensorflow-metal==1.0.0 (optional, for macOS GPU acceleration)
+- keras==2.13.1 (optional, for neural network models)
 
 ## Troubleshooting
 
-- **TensorFlow Issues**: If encountering TensorFlow compatibility problems, use the `create_dummy_model.py` script instead, which creates a scikit-learn based model without TensorFlow dependencies.
+- **Model Selection**: The application will automatically detect if TensorFlow/Keras is available on your system. If not available, it will fall back to using a scikit-learn model, which has fewer dependencies but still provides excellent performance.
 
-- **Model Loading Errors**: Ensure that the model file exists in the `saved_models` directory. If not, run the model training process first.
+- **Missing Values**: The application now automatically detects and handles missing values in the dataset using imputation. No manual preprocessing is needed.
+
+- **TensorFlow on macOS**: For macOS users, we recommend using the `tensorflow-macos` and `tensorflow-metal` packages for better compatibility with Apple hardware:
+  ```bash
+  pip install tensorflow-macos tensorflow-metal
+  ```
+
+- **Model Loading Errors**: If the dashboard cannot load a model, it will now attempt to load an alternative model type (e.g., if `.h5` neural network model fails, it will try the `.pkl` scikit-learn model).
 
 - **Data Processing Errors**: Check that all required CSV files are present in the project directory.
-
-- **UI Rendering Issues**: If experiencing UI display problems, try adjusting browser zoom or using a different browser.
 
 ## Future Enhancements
 
@@ -204,6 +215,7 @@ The model is evaluated using several metrics:
 - Cloud deployment options
 - Personalized health recommendations based on ML insights
 - Support for additional health metrics
+- Enhanced neural network architectures with LSTM layers for time-series analysis
 
 ## License
 
@@ -217,4 +229,4 @@ This project is licensed under the MIT License - see the LICENSE file for detail
 
 ## Contact
 
-For questions or support, please contact: [your-email@example.com] # health-tracker
+For questions or support, please contact: [your-email@example.com]

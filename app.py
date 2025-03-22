@@ -5,16 +5,42 @@ import matplotlib.pyplot as plt
 import seaborn as sns
 import plotly.express as px
 import plotly.graph_objects as go
-import tensorflow as tf
-import joblib
+import warnings
 import os
 import json
+import joblib
 from datetime import datetime, timedelta
 from pyngrok import ngrok
 import time
 import sys
-import warnings
+
+# Suppress warnings
 warnings.filterwarnings('ignore')
+
+# Import TensorFlow and Keras
+try:
+    import tensorflow as tf
+    print(f"TensorFlow version: {tf.version.VERSION}")
+    
+    # Enable Metal GPU support for macOS
+    physical_devices = tf.config.list_physical_devices('GPU')
+    if physical_devices:
+        print(f"Found GPU devices: {physical_devices}")
+        try:
+            tf.config.experimental.set_memory_growth(physical_devices[0], True)
+            print("GPU memory growth enabled")
+        except Exception as e:
+            print(f"Error configuring GPU: {e}")
+    else:
+        print("No GPU devices found, using CPU")
+    
+    # Import Keras
+    from tensorflow.keras.models import load_model
+    print("Successfully imported tensorflow.keras")
+except ImportError as e:
+    st.error(f"Failed to import TensorFlow/Keras: {e}")
+    st.error("This application requires TensorFlow and Keras to run. Please install it and try again.")
+    raise SystemExit("TensorFlow is required to run this application.")
 
 # Set page configuration
 st.set_page_config(
@@ -121,22 +147,28 @@ st.markdown("""
 
 # Class for health tracking application
 class HealthTrackerApp:
-    def __init__(self, model_dir='saved_models', data_dir='.'):
+    def __init__(self, model_dir='saved_models', data_dir='data'):
         self.model_dir = model_dir
         self.data_dir = data_dir
         self.model = None
         self.scaler = None
+        self.imputer = None
         self.feature_names = None
         self.target_col = None
         self.demo_data = None
         
     def load_model(self):
         """Load the trained model and preprocessing objects"""
-        # Load model
-        model_path = os.path.join(self.model_dir, 'health_model.pkl')
+        # Load neural network model
+        model_path = os.path.join(self.model_dir, 'health_model.h5')
+        
         if os.path.exists(model_path):
-            self.model = joblib.load(model_path)
-            st.sidebar.success("Model loaded successfully!")
+            try:
+                self.model = load_model(model_path)
+                st.sidebar.success("Neural network model loaded successfully!")
+            except Exception as e:
+                st.sidebar.error(f"Error loading neural network model: {e}")
+                return False
         else:
             st.sidebar.error("Model file not found. Please train the model first.")
             return False
@@ -147,6 +179,13 @@ class HealthTrackerApp:
             self.scaler = joblib.load(scaler_path)
         else:
             st.sidebar.warning("Scaler not found. Predictions may be inaccurate.")
+        
+        # Load imputer if available
+        imputer_path = os.path.join('processed_data', 'imputer.pkl')
+        if os.path.exists(imputer_path):
+            self.imputer = joblib.load(imputer_path)
+        else:
+            self.imputer = None
         
         # Load feature info
         feature_info_path = os.path.join(self.model_dir, 'feature_info.json')
@@ -414,142 +453,523 @@ class HealthTrackerApp:
             st.plotly_chart(fig, use_container_width=True)
     
     def predictions_page(self):
-        """Display the predictions page"""
-        st.header("Health Predictions")
+        """Make predictions based on user input"""
+        st.header("Make Predictions")
         
         if self.model is None:
             if not self.load_model():
-                st.warning("Model not loaded. Please load the model first.")
+                st.warning("Please load a model first to make predictions.")
                 return
         
-        st.write("Use this page to get personalized health predictions based on your metrics.")
+        # Variables to store prediction results outside the form
+        prediction_made = False
+        prediction_data = {}
         
-        # Create input form for health metrics
+        # Create form for user inputs
         with st.form("prediction_form"):
-            st.subheader("Enter your health metrics")
+            # Initialize default values
+            inputs = {}
             
-            # Dynamic inputs based on required features for the model
-            input_values = {}
+            # Create input fields for each feature
+            st.subheader("Enter Health Metrics")
             
-            if self.feature_names:
-                # For each feature, create an appropriate input widget
-                for feature in self.feature_names:
-                    # Determine appropriate input type based on feature name
-                    if 'rate' in feature.lower():
-                        input_values[feature] = st.number_input(
-                            f"{feature.replace('_', ' ').title()}", 
-                            min_value=0.0, 
-                            max_value=200.0, 
-                            value=75.0,
-                            step=1.0
-                        )
-                    elif 'temp' in feature.lower():
-                        input_values[feature] = st.number_input(
-                            f"{feature.replace('_', ' ').title()} (°C)", 
-                            min_value=30.0, 
-                            max_value=45.0, 
-                            value=36.5,
-                            step=0.1
-                        )
-                    elif any(x in feature.lower() for x in ['hour', 'minute', 'second']):
-                        max_val = 23 if 'hour' in feature.lower() else 59
-                        input_values[feature] = st.number_input(
-                            f"{feature.replace('_', ' ').title()}", 
-                            min_value=0, 
-                            max_value=max_val, 
-                            value=12 if 'hour' in feature.lower() else 30,
-                            step=1
-                        )
-                    elif 'activity' in feature.lower():
-                        input_values[feature] = st.selectbox(
-                            f"{feature.replace('_', ' ').title()}", 
-                            ['Rest', 'Walk', 'Run', 'Exercise']
-                        )
-                    else:
-                        input_values[feature] = st.number_input(
-                            f"{feature.replace('_', ' ').title()}", 
-                            value=0.0,
-                            step=0.1
-                        )
-            else:
-                # Fallback if no feature names are available
-                st.warning("Feature information not available. Using default inputs.")
-                input_values['heart_rate'] = st.number_input("Heart Rate (BPM)", min_value=0.0, max_value=200.0, value=75.0)
-                input_values['electrodermal_activity'] = st.number_input("Electrodermal Activity (μS)", min_value=0.0, max_value=100.0, value=5.0)
-                input_values['temperature'] = st.number_input("Body Temperature (°C)", min_value=30.0, max_value=45.0, value=36.5)
+            # Define default values based on feature names
+            default_values = {
+                # Heart rate related defaults
+                'heart_rate': 75.0,
+                'hr_rolling_mean': 75.0,
+                'hr_rolling_std': 5.0,
+                
+                # EDA (Electrodermal Activity) related defaults
+                'electrodermal_activity': 5.0,
+                'eda_rolling_mean': 5.0,
+                'eda_rolling_std': 0.5,
+                
+                # Temperature related defaults
+                'temperature': 36.5,
+                'temp_rolling_mean': 36.5,
+                'temp_rolling_std': 0.2,
+                
+                # Blood volume pulse related defaults
+                'blood_volume_pulse': 70.0,
+                'bvp_rolling_mean': 70.0,
+                'bvp_rolling_std': 10.0,
+                
+                # Time related defaults
+                'hour': 12.0,
+                'minute': 30.0,
+                'second': 0.0,
+                'day_of_week': 3.0,
+                
+                # Default for any other features
+                'default': 0.0
+            }
             
-            submit_button = st.form_submit_button("Get Prediction")
-        
-        # Process prediction on form submission
-        if submit_button:
-            try:
-                # Prepare input data for prediction
-                input_df = pd.DataFrame([input_values])
-                
-                # Handle categorical features (if any)
-                for col in input_df.columns:
-                    if input_df[col].dtype == 'object':
-                        # One-hot encode categorical features
-                        dummies = pd.get_dummies(input_df[col], prefix=col)
-                        input_df = pd.concat([input_df.drop(columns=[col]), dummies], axis=1)
-                
-                # Ensure all required features are present
-                missing_features = set(self.feature_names) - set(input_df.columns)
-                for feature in missing_features:
-                    input_df[feature] = 0  # Default value for missing features
-                
-                # Apply feature scaling if scaler is available
-                if self.scaler is not None:
-                    input_scaled = self.scaler.transform(input_df[self.feature_names])
-                else:
-                    input_scaled = input_df[self.feature_names].values
-                
-                # Make prediction
-                prediction = self.model.predict(input_scaled)[0]
-                
-                # Display prediction
-                st.success(f"Predicted {self.target_col}: {prediction:.2f}")
-                
-                # Display additional information based on the predicted value
-                if self.target_col == 'heart_rate':
-                    if prediction < 60:
-                        st.info("Your predicted heart rate is below normal resting range (60-100 BPM). This could indicate bradycardia.")
-                    elif prediction > 100:
-                        st.warning("Your predicted heart rate is above normal resting range (60-100 BPM). This could indicate tachycardia.")
-                    else:
-                        st.info("Your predicted heart rate is within normal resting range (60-100 BPM).")
-                
-                # Display prediction confidence
-                if self.metrics and 'rmse' in self.metrics:
-                    rmse = self.metrics['rmse']
-                    st.info(f"Model accuracy: Predictions are typically within ±{rmse:.2f} of the actual value.")
-                
-                # Display personalized recommendations
-                st.subheader("Personalized Recommendations")
-                
-                if self.target_col == 'heart_rate':
-                    if prediction > 100:
-                        st.markdown("""
-                        * Consider stress reduction techniques such as meditation or deep breathing
-                        * Ensure you're staying hydrated throughout the day
-                        * Consult a healthcare professional if you consistently have elevated heart rate
-                        """)
-                    elif prediction < 60:
-                        st.markdown("""
-                        * Increase physical activity gradually if appropriate
-                        * Monitor your heart rate regularly
-                        * Consult a healthcare professional if your heart rate is consistently low
-                        """)
-                    else:
-                        st.markdown("""
-                        * Your predicted heart rate is in a healthy range
-                        * Continue with regular physical activity
-                        * Maintain a balanced diet and good sleep habits
-                        """)
+            # Create columns for inputs
+            num_cols = 3
+            for i in range(0, len(self.feature_names), num_cols):
+                cols = st.columns(num_cols)
+                for j in range(num_cols):
+                    idx = i + j
+                    if idx < len(self.feature_names):
+                        feature = self.feature_names[idx]
+                        # Get appropriate default value based on feature name
+                        default_value = default_values.get(feature, default_values['default'])
                         
-            except Exception as e:
-                st.error(f"Error making prediction: {e}")
-                st.info("Try loading the model again or check that the input values are correct.")
+                        # Set appropriate min, max, and step values based on feature type
+                        min_val, max_val, step_val = self._get_input_range(feature)
+                        
+                        inputs[feature] = cols[j].number_input(
+                            f"{feature.replace('_', ' ').title()}", 
+                            value=default_value,
+                            min_value=min_val,
+                            max_value=max_val,
+                            step=step_val
+                        )
+            
+            # Patient information (optional)
+            st.subheader("Patient Information (Optional)")
+            col1, col2, col3 = st.columns(3)
+            with col1:
+                age = st.number_input("Age", min_value=1, max_value=120, value=35, step=1)
+            with col2:
+                gender = st.selectbox("Gender", ["Male", "Female", "Other"], index=0)
+            with col3:
+                weight = st.number_input("Weight (kg)", min_value=20.0, max_value=250.0, value=70.0, step=0.1)
+            
+            col1, col2 = st.columns(2)
+            with col1:
+                height = st.number_input("Height (cm)", min_value=50.0, max_value=250.0, value=170.0, step=0.1)
+            with col2:
+                activity_level = st.selectbox("Activity Level", 
+                                             ["Sedentary", "Lightly Active", "Moderately Active", "Very Active", "Extremely Active"], 
+                                             index=1)
+            
+            # Submit button
+            submitted = st.form_submit_button("Predict")
+            
+            if submitted:
+                try:
+                    # Prepare input data
+                    input_data = np.array([inputs[feature] for feature in self.feature_names]).reshape(1, -1)
+                    
+                    # Apply imputation if available and needed
+                    if np.isnan(input_data).any() and self.imputer is not None:
+                        input_data = self.imputer.transform(input_data)
+                    elif np.isnan(input_data).any():
+                        st.warning("Input contains missing values and no imputer is available. Results may be inaccurate.")
+                    
+                    # Scale the input if scaler is available
+                    if self.scaler is not None:
+                        input_data = self.scaler.transform(input_data)
+                    
+                    # Make prediction with neural network model
+                    prediction = self.model.predict(input_data)[0][0]
+                    
+                    # Store key health metrics for display
+                    heart_rate = inputs.get('heart_rate', prediction if self.target_col == 'heart_rate' else 75.0)
+                    temperature = inputs.get('temperature', 36.5)
+                    eda = inputs.get('electrodermal_activity', 5.0)
+                    
+                    # Store prediction results to use outside the form
+                    prediction_made = True
+                    prediction_data = {
+                        'prediction': prediction,
+                        'target_col': self.target_col,
+                        'heart_rate': heart_rate,
+                        'temperature': temperature,
+                        'eda': eda,
+                        'patient_info': {
+                            'age': age,
+                            'gender': gender,
+                            'weight': weight,
+                            'height': height,
+                            'activity_level': activity_level
+                        }
+                    }
+                    
+                    # Display prediction results in a nice format
+                    st.header("🩺 Health Prediction Results")
+                    
+                    # Create tabs for different views of the prediction
+                    tab1, tab2, tab3, tab4 = st.tabs(["📊 Overview", "🔍 Detailed Analysis", "🩺 Health Assessment", "📋 Recommendations"])
+                    
+                    with tab1:
+                        # Overview tab
+                        st.subheader("Predicted Health Metrics")
+                        
+                        # Display prediction in columns
+                        cols = st.columns(3)
+                        with cols[0]:
+                            if self.target_col == 'heart_rate':
+                                status_color = self._get_heart_rate_status_color(prediction)
+                                st.markdown(f"<h1 style='text-align: center; color: {status_color};'>{prediction:.1f}</h1>", unsafe_allow_html=True)
+                                st.markdown("<p style='text-align: center;'>Predicted Heart Rate (BPM)</p>", unsafe_allow_html=True)
+                            else:
+                                st.markdown(f"<h1 style='text-align: center;'>{prediction:.1f}</h1>", unsafe_allow_html=True)
+                                st.markdown(f"<p style='text-align: center;'>Predicted {self.target_col.replace('_', ' ').title()}</p>", unsafe_allow_html=True)
+                        
+                        with cols[1]:
+                            if 'temperature' in inputs:
+                                temp_status_color = "#4a86e8"  # Default blue
+                                if temperature < 36.0:
+                                    temp_status_color = "#9467bd"  # Purple for low
+                                elif temperature > 37.5:
+                                    temp_status_color = "#d9534f"  # Red for high
+                                
+                                st.markdown(f"<h1 style='text-align: center; color: {temp_status_color};'>{temperature:.1f}</h1>", unsafe_allow_html=True)
+                                st.markdown("<p style='text-align: center;'>Body Temperature (°C)</p>", unsafe_allow_html=True)
+                        
+                        with cols[2]:
+                            if 'electrodermal_activity' in inputs:
+                                eda_status_color = "#4a86e8"  # Default blue
+                                if eda > 10.0:
+                                    eda_status_color = "#f0ad4e"  # Orange for high stress
+                                
+                                st.markdown(f"<h1 style='text-align: center; color: {eda_status_color};'>{eda:.1f}</h1>", unsafe_allow_html=True)
+                                st.markdown("<p style='text-align: center;'>Electrodermal Activity (μS)</p>", unsafe_allow_html=True)
+                        
+                        # Create gauge chart for the prediction
+                        st.subheader("Health Status Indicator")
+                        
+                        # Determine reasonable min/max values for the gauge
+                        min_val = 0
+                        max_val = 200
+                        if self.target_col == 'heart_rate':
+                            min_val = 40
+                            max_val = 180
+                            threshold_zones = [
+                                {'name': 'Rest', 'min': 40, 'max': 60, 'color': 'blue'},
+                                {'name': 'Normal', 'min': 60, 'max': 100, 'color': 'green'},
+                                {'name': 'Elevated', 'min': 100, 'max': 140, 'color': 'orange'},
+                                {'name': 'High', 'min': 140, 'max': 180, 'color': 'red'}
+                            ]
+                        elif self.target_col == 'stress_level':
+                            min_val = 0
+                            max_val = 10
+                            threshold_zones = [
+                                {'name': 'Low', 'min': 0, 'max': 3, 'color': 'green'},
+                                {'name': 'Medium', 'min': 3, 'max': 7, 'color': 'orange'},
+                                {'name': 'High', 'min': 7, 'max': 10, 'color': 'red'}
+                            ]
+                        else:
+                            # For other targets, use generic visualization
+                            threshold_zones = []
+                            
+                        # Get the status text
+                        status_text = self._get_health_status_text(self.target_col, prediction)
+                        
+                        # Create gauge chart
+                        fig = go.Figure(go.Indicator(
+                            mode="gauge+number+delta",
+                            value=prediction,
+                            domain={'x': [0, 1], 'y': [0, 1]},
+                            title={'text': f"Predicted {self.target_col.replace('_', ' ').title()}", 'font': {'size': 24}},
+                            delta={'reference': self._get_normal_reference_value(self.target_col)},
+                            gauge={
+                                'axis': {'range': [min_val, max_val], 'tickwidth': 1, 'tickcolor': "darkblue"},
+                                'bar': {'color': "#5e97f6"},
+                                'bgcolor': "white",
+                                'borderwidth': 2,
+                                'bordercolor': "gray",
+                                'steps': [
+                                    {'range': [zone['min'], zone['max']], 'color': zone['color']} 
+                                    for zone in threshold_zones
+                                ],
+                            }
+                        ))
+                        
+                        fig.update_layout(
+                            height=300,
+                            paper_bgcolor='rgba(245, 247, 249, 0)',
+                            plot_bgcolor='rgba(245, 247, 249, 0)',
+                            font={'color': "darkblue", 'family': "Arial"}
+                        )
+                        
+                        st.plotly_chart(fig, use_container_width=True)
+                        
+                        # Display health status
+                        st.info(f"**Health Status:** {status_text}")
+                        
+                    with tab2:
+                        # Detailed Analysis tab
+                        st.subheader("Detailed Health Metrics Analysis")
+                        
+                        # Create a radar chart for multiple metrics
+                        selected_features = [f for f in self.feature_names if not any(x in f for x in ['rolling', 'hour', 'minute', 'second', 'day'])]
+                        if len(selected_features) > 2:
+                            # Limit to most important features
+                            selected_features = selected_features[:5]
+                        
+                        # Normalize values for radar chart
+                        radar_values = []
+                        for feature in selected_features:
+                            value = inputs.get(feature, 0)
+                            min_val, max_val, _ = self._get_input_range(feature)
+                            if min_val is not None and max_val is not None:
+                                # Normalize to 0-1 scale
+                                normalized = (value - min_val) / (max_val - min_val)
+                                radar_values.append(normalized)
+                            else:
+                                radar_values.append(0.5)  # Default for unknown ranges
+                        
+                        # Create radar chart
+                        fig = go.Figure()
+                        
+                        fig.add_trace(go.Scatterpolar(
+                            r=radar_values,
+                            theta=[f.replace('_', ' ').title() for f in selected_features],
+                            fill='toself',
+                            name='Current Metrics',
+                            line_color='#4a86e8'
+                        ))
+                        
+                        # Add reference values for comparison
+                        reference_values = []
+                        for feature in selected_features:
+                            ref_val = self._get_normal_reference_value(feature)
+                            min_val, max_val, _ = self._get_input_range(feature)
+                            if min_val is not None and max_val is not None:
+                                # Normalize to 0-1 scale
+                                normalized = (ref_val - min_val) / (max_val - min_val)
+                                reference_values.append(normalized)
+                            else:
+                                reference_values.append(0.5)  # Default for unknown ranges
+                        
+                        fig.add_trace(go.Scatterpolar(
+                            r=reference_values,
+                            theta=[f.replace('_', ' ').title() for f in selected_features],
+                            fill='toself',
+                            name='Normal Range',
+                            line_color='rgba(0, 200, 0, 0.5)',
+                            fillcolor='rgba(0, 200, 0, 0.1)'
+                        ))
+                        
+                        fig.update_layout(
+                            polar=dict(
+                                radialaxis=dict(
+                                    visible=True,
+                                    range=[0, 1]
+                                )
+                            ),
+                            showlegend=True,
+                            height=400,
+                            paper_bgcolor='rgba(245, 247, 249, 0)',
+                            plot_bgcolor='rgba(245, 247, 249, 0)'
+                        )
+                        
+                        st.plotly_chart(fig, use_container_width=True)
+                        
+                        # Show trend data (simulated for demonstration)
+                        st.subheader("Trend Analysis")
+                        
+                        # Create simulated trend data
+                        dates = pd.date_range(end=datetime.now(), periods=10, freq='D')
+                        if self.target_col == 'heart_rate':
+                            # Simulate heart rate trend with slight variation
+                            trend_values = [
+                                prediction * (1 + 0.1 * np.sin(i)) 
+                                for i in range(10)
+                            ]
+                            
+                            # Create trend chart
+                            trend_df = pd.DataFrame({
+                                'Date': dates,
+                                'Value': trend_values
+                            })
+                            
+                            fig = px.line(
+                                trend_df, 
+                                x='Date', 
+                                y='Value',
+                                title=f'Estimated {self.target_col.replace("_", " ").title()} Trend',
+                                markers=True
+                            )
+                            
+                            # Add reference ranges
+                            fig.add_hline(y=60, line_dash="dash", line_color="green", annotation_text="Min Normal")
+                            fig.add_hline(y=100, line_dash="dash", line_color="orange", annotation_text="Max Normal")
+                            
+                            fig.update_layout(
+                                height=300,
+                                xaxis_title='Date',
+                                yaxis_title=self.target_col.replace('_', ' ').title(),
+                                paper_bgcolor='rgba(245, 247, 249, 0)',
+                                plot_bgcolor='rgba(245, 247, 249, 0.5)'
+                            )
+                            
+                            st.plotly_chart(fig, use_container_width=True)
+                    
+                    with tab3:
+                        # Health Assessment tab
+                        st.subheader("Health Risk Assessment")
+                        
+                        # Calculate BMI if height and weight provided
+                        if height > 0 and weight > 0:
+                            bmi = weight / ((height/100) ** 2)
+                            bmi_category = self._get_bmi_category(bmi)
+                            
+                            # Create BMI indicator
+                            fig = go.Figure(go.Indicator(
+                                mode="gauge+number",
+                                value=bmi,
+                                domain={'x': [0, 1], 'y': [0, 1]},
+                                title={'text': "BMI"},
+                                gauge={
+                                    'axis': {'range': [10, 40]},
+                                    'bar': {'color': self._get_bmi_color(bmi)},
+                                    'steps': [
+                                        {'range': [10, 18.5], 'color': '#9467bd'},  # Underweight
+                                        {'range': [18.5, 25], 'color': '#5cb85c'},  # Normal
+                                        {'range': [25, 30], 'color': '#f0ad4e'},    # Overweight
+                                        {'range': [30, 40], 'color': '#d9534f'}     # Obese
+                                    ],
+                                }
+                            ))
+                            
+                            fig.update_layout(
+                                height=250,
+                                paper_bgcolor='rgba(245, 247, 249, 0)',
+                                plot_bgcolor='rgba(245, 247, 249, 0)'
+                            )
+                            
+                            col1, col2 = st.columns([2, 3])
+                            
+                            with col1:
+                                st.plotly_chart(fig, use_container_width=True)
+                            
+                            with col2:
+                                st.markdown(f"**BMI Category:** {bmi_category}")
+                                st.markdown(f"**Height:** {height} cm")
+                                st.markdown(f"**Weight:** {weight} kg")
+                                st.markdown(f"**Gender:** {gender}")
+                                st.markdown(f"**Age:** {age} years")
+                                st.markdown(f"**Activity Level:** {activity_level}")
+                        
+                        # Potential health conditions section
+                        st.subheader("Potential Health Indicators")
+                        
+                        # Get health conditions based on predicted value
+                        conditions = self._get_potential_health_conditions(self.target_col, prediction, temperature, eda)
+                        
+                        if conditions:
+                            # Create risk level indicators for each condition
+                            for condition in conditions:
+                                col1, col2 = st.columns([1, 4])
+                                with col1:
+                                    risk_color = {
+                                        'Low': '#5cb85c',
+                                        'Moderate': '#f0ad4e',
+                                        'High': '#d9534f'
+                                    }.get(condition['risk_level'], '#4a86e8')
+                                    
+                                    st.markdown(f"""
+                                    <div style="background-color: {risk_color}; padding: 10px; border-radius: 5px; text-align: center; color: white;">
+                                        <strong>{condition['risk_level']}</strong>
+                                    </div>
+                                    """, unsafe_allow_html=True)
+                                
+                                with col2:
+                                    st.markdown(f"**{condition['name']}**")
+                                    st.markdown(f"{condition['description']}")
+                        else:
+                            st.info("No specific health concerns identified based on the provided metrics.")
+                    
+                    with tab4:
+                        # Recommendations tab
+                        st.subheader("Personalized Health Recommendations")
+                        
+                        # Generate recommendations based on inputs and prediction
+                        recommendations = self._generate_recommendations(
+                            self.target_col, 
+                            prediction, 
+                            heart_rate, 
+                            temperature, 
+                            eda,
+                            age=age,
+                            gender=gender,
+                            activity_level=activity_level
+                        )
+                        
+                        # Save conditions and recommendations for use outside the form
+                        prediction_data['conditions'] = conditions
+                        prediction_data['recommendations'] = recommendations
+                        
+                        # Display recommendations in expandable sections
+                        for category, recs in recommendations.items():
+                            with st.expander(f"📝 {category}", expanded=True):
+                                for rec in recs:
+                                    st.markdown(f"• {rec}")
+                        
+                        # Call to action
+                        st.info("📌 **Note:** These recommendations are generated based on the predicted values and provided information. Always consult with a healthcare professional for personalized medical advice.")
+                        
+                except Exception as e:
+                    st.error(f"Error making prediction: {e}")
+                    import traceback
+                    st.code(traceback.format_exc())
+
+        # Add download button outside the form
+        if prediction_made:
+            # Option to download report
+            st.download_button(
+                "📥 Download Health Assessment Report",
+                self._generate_health_report(
+                    prediction_data['prediction'], 
+                    prediction_data['target_col'],
+                    prediction_data['heart_rate'],
+                    prediction_data['temperature'],
+                    prediction_data['eda'],
+                    prediction_data['conditions'],
+                    prediction_data['recommendations'],
+                    prediction_data['patient_info']
+                ),
+                file_name="health_assessment_report.txt",
+                mime="text/plain"
+            )
+    
+    def _get_input_range(self, feature):
+        """Helper function to determine appropriate input ranges for different features"""
+        # Default values
+        min_val = None
+        max_val = None
+        step_val = 0.1
+        
+        # Set ranges based on feature type
+        if 'heart_rate' in feature:
+            min_val = 40.0
+            max_val = 200.0
+            step_val = 1.0
+        elif 'electrodermal' in feature:
+            min_val = 0.0
+            max_val = 20.0
+            step_val = 0.1
+        elif 'temperature' in feature:
+            min_val = 35.0
+            max_val = 40.0
+            step_val = 0.1
+        elif 'blood' in feature:
+            min_val = 0.0
+            max_val = 150.0
+            step_val = 1.0
+        elif 'hour' in feature:
+            min_val = 0.0
+            max_val = 23.0
+            step_val = 1.0
+        elif 'minute' in feature or 'second' in feature:
+            min_val = 0.0
+            max_val = 59.0
+            step_val = 1.0
+        elif 'day_of_week' in feature:
+            min_val = 0.0
+            max_val = 6.0
+            step_val = 1.0
+        elif 'std' in feature:
+            min_val = 0.0
+            max_val = 20.0
+            step_val = 0.1
+            
+        return min_val, max_val, step_val
     
     def upload_data_page(self):
         """Display the data upload page"""
@@ -596,15 +1016,81 @@ class HealthTrackerApp:
             col1, col2, col3 = st.columns(3)
             
             with col1:
-                heart_rate = st.number_input("Heart Rate (BPM)", min_value=0, max_value=200, value=75)
+                heart_rate = st.number_input(
+                    "Heart Rate (BPM)", 
+                    min_value=40, 
+                    max_value=200, 
+                    value=75, 
+                    step=1,
+                    help="Normal resting heart rate is typically between 60-100 BPM"
+                )
             
             with col2:
-                eda = st.number_input("Electrodermal Activity (μS)", min_value=0.0, max_value=100.0, value=5.0, step=0.1)
+                eda = st.number_input(
+                    "Electrodermal Activity (μS)", 
+                    min_value=0.0, 
+                    max_value=30.0, 
+                    value=5.0, 
+                    step=0.1,
+                    help="Measures skin conductance which increases with psychological arousal"
+                )
             
             with col3:
-                temp = st.number_input("Body Temperature (°C)", min_value=30.0, max_value=45.0, value=36.5, step=0.1)
+                temp = st.number_input(
+                    "Body Temperature (°C)", 
+                    min_value=35.0, 
+                    max_value=42.0, 
+                    value=36.7, 
+                    step=0.1,
+                    help="Normal body temperature is around 36.5-37.5°C"
+                )
             
-            activity = st.selectbox("Current Activity", ["Rest", "Walk", "Run", "Exercise"])
+            # Additional inputs
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                activity = st.selectbox(
+                    "Current Activity", 
+                    ["Rest", "Walk", "Run", "Exercise", "Sleep", "Work"],
+                    index=0,
+                    help="Select your current physical activity"
+                )
+            
+            with col2:
+                stress_level = st.slider(
+                    "Stress Level (0-10)",
+                    min_value=0,
+                    max_value=10,
+                    value=3,
+                    step=1,
+                    help="0 = No stress, 10 = Maximum stress"
+                )
+            
+            # Time information
+            st.subheader("Time Information")
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                current_time = datetime.now()
+                measurement_time = st.time_input(
+                    "Time of Measurement",
+                    value=current_time.time(),
+                    help="The time when these measurements were taken"
+                )
+            
+            with col2:
+                measurement_date = st.date_input(
+                    "Date of Measurement",
+                    value=current_time.date(),
+                    help="The date when these measurements were taken"
+                )
+            
+            # Notes
+            notes = st.text_area(
+                "Notes",
+                value="",
+                help="Any additional information or context about these measurements"
+            )
             
             submitted = st.form_submit_button("Save Data")
         
@@ -612,13 +1098,17 @@ class HealthTrackerApp:
             st.success("Data saved successfully!")
             
             # Create a dataframe with the manually entered data
+            measurement_datetime = datetime.combine(measurement_date, measurement_time)
+            
             manual_data = pd.DataFrame({
-                'timestamp': [datetime.now().timestamp()],
+                'timestamp': [measurement_datetime.timestamp()],
+                'datetime': [measurement_datetime],
                 'heart_rate': [heart_rate],
                 'electrodermal_activity': [eda],
                 'temperature': [temp],
                 'activity': [activity],
-                'datetime': [datetime.now()]
+                'stress_level': [stress_level],
+                'notes': [notes]
             })
             
             # Display the data
@@ -642,20 +1132,15 @@ class HealthTrackerApp:
             self.load_model()
         
         if self.model is not None:
-            # Display model information
+            # Display model type
             st.subheader("Model Type")
-            model_type = type(self.model).__name__
-            st.write(f"This is a **{model_type}** model.")
+            st.write("This is a **Neural Network** model built with TensorFlow and Keras.")
             
-            # Display model coefficients for linear models
-            if hasattr(self.model, 'coef_'):
-                st.subheader("Model Coefficients")
-                coef_df = pd.DataFrame({
-                    'Feature': self.feature_names,
-                    'Coefficient': self.model.coef_
-                }).sort_values('Coefficient', ascending=False)
-                
-                st.dataframe(coef_df)
+            # Display model architecture
+            st.subheader("Model Architecture")
+            model_summary = []
+            self.model.summary(print_fn=lambda x: model_summary.append(x))
+            st.code("\n".join(model_summary))
             
             # Display model metrics if available
             if self.metrics:
@@ -673,42 +1158,61 @@ class HealthTrackerApp:
                         st.metric(label=f"{metric}", value=f"{value:.4f}" if isinstance(value, float) else value)
                         st.caption(description)
             
-            # Display feature importance
-            st.subheader("Feature Importance")
-            st.write("This is a representation of how much each feature contributes to predictions.")
-            
-            # Create feature importance visualization
+            # Display feature importance visualization
             if self.feature_names:
-                # For linear models, use coefficients as importance
-                if hasattr(self.model, 'coef_'):
-                    importances = np.abs(self.model.coef_)
-                else:
-                    # Create random importance values for illustration
-                    importances = np.random.uniform(0, 1, len(self.feature_names))
+                st.subheader("Feature Importance")
+                st.write("This visualization represents an approximation of how each feature contributes to predictions.")
                 
-                importances = importances / np.sum(importances)
+                # For neural networks, we'll create a simple feature importance visualization
+                # based on the weights of the first layer
+                try:
+                    # Get weights from the first layer
+                    first_layer_weights = np.abs(self.model.layers[0].get_weights()[0])
+                    # Sum the absolute weights for each feature
+                    importances = np.sum(first_layer_weights, axis=1)
+                    # Normalize to sum to 1
+                    importances = importances / np.sum(importances)
+                    
+                    feature_imp = pd.DataFrame({
+                        'Feature': self.feature_names,
+                        'Importance': importances
+                    }).sort_values('Importance', ascending=False)
+                    
+                    fig = px.bar(
+                        feature_imp,
+                        x='Importance',
+                        y='Feature',
+                        orientation='h',
+                        title='Feature Importance Estimation (Based on First Layer Weights)',
+                        labels={'Importance': 'Relative Importance', 'Feature': 'Feature Name'},
+                        color='Importance',
+                        color_continuous_scale=['#98bef9', '#7baaf7', '#5e97f6', '#4a86e8', '#3a76d8']
+                    )
+                    fig.update_layout(
+                        height=500,
+                        paper_bgcolor='rgba(245, 247, 249, 0)',
+                        plot_bgcolor='rgba(245, 247, 249, 0.5)',
+                        coloraxis_showscale=False
+                    )
+                    st.plotly_chart(fig, use_container_width=True)
+                    
+                except Exception as e:
+                    st.warning(f"Could not calculate feature importance: {e}")
+                    st.info("Feature importance calculation for deep neural networks requires additional tooling.")
                 
-                feature_imp = pd.DataFrame({
-                    'Feature': self.feature_names,
-                    'Importance': importances
-                }).sort_values('Importance', ascending=False)
+                # Show model training history if available
+                history_dir = os.path.join(self.model_dir, 'figures')
+                history_path = os.path.join(history_dir, 'training_history.png')
                 
-                fig = px.bar(
-                    feature_imp,
-                    x='Importance',
-                    y='Feature',
-                    orientation='h',
-                    title='Feature Importance',
-                    labels={'Importance': 'Relative Importance', 'Feature': 'Feature Name'},
-                    color='Importance',
-                    color_continuous_scale=['#98bef9', '#7baaf7', '#5e97f6', '#4a86e8', '#3a76d8']
-                )
-                fig.update_layout(
-                    paper_bgcolor='rgba(245, 247, 249, 0)',
-                    plot_bgcolor='rgba(245, 247, 249, 0.5)',
-                    coloraxis_showscale=False
-                )
-                st.plotly_chart(fig, use_container_width=True)
+                if os.path.exists(history_path):
+                    st.subheader("Training History")
+                    st.image(history_path, caption="Model Training History")
+                    
+                # Show predictions visualization if available
+                predictions_path = os.path.join(history_dir, 'predictions.png')
+                if os.path.exists(predictions_path):
+                    st.subheader("Prediction Performance")
+                    st.image(predictions_path, caption="Actual vs Predicted Values")
             else:
                 st.info("Feature information not available.")
         else:
@@ -727,14 +1231,14 @@ class HealthTrackerApp:
         ### Features
         
         - **Data Analysis**: Upload and analyze your health data from various sources
-        - **Predictive Analytics**: Use deep learning to forecast health metrics
+        - **Neural Network Predictions**: Use deep learning to forecast health metrics with high accuracy
         - **Personalized Recommendations**: Get tailored health advice based on your data
         - **Interactive Dashboard**: Visualize your health trends in real-time
         
         ### How It Works
         
         1. The application collects health data from various sources
-        2. Deep learning models analyze patterns in your data
+        2. Deep neural networks analyze patterns in your data
         3. The system generates predictions and personalized recommendations
         4. You can view all insights through an intuitive dashboard
         
@@ -750,6 +1254,243 @@ class HealthTrackerApp:
         # Contact information
         st.subheader("Contact Information")
         st.write("For questions or support, please contact: support@aihealthtracker.example.com")
+
+    def _get_normal_reference_value(self, feature):
+        """Get a normal reference value for a given feature"""
+        if feature == 'heart_rate' or 'heart_rate' in feature:
+            return 75.0
+        elif feature == 'temperature' or 'temperature' in feature:
+            return 36.5
+        elif 'electrodermal' in feature:
+            return 5.0
+        elif 'blood_volume' in feature:
+            return 70.0
+        elif feature == 'stress_level':
+            return 3.0
+        else:
+            return 0.0
+    
+    def _get_heart_rate_status_color(self, heart_rate):
+        """Get color code based on heart rate value"""
+        if heart_rate < 60:
+            return "#9467bd"  # Purple for low
+        elif 60 <= heart_rate <= 100:
+            return "#5cb85c"  # Green for normal
+        elif 100 < heart_rate <= 140:
+            return "#f0ad4e"  # Orange for elevated
+        else:
+            return "#d9534f"  # Red for high
+    
+    def _get_health_status_text(self, target, value):
+        """Get a health status text based on the predicted value"""
+        if target == 'heart_rate':
+            if value < 60:
+                return "Bradycardia (low heart rate)"
+            elif 60 <= value <= 100:
+                return "Normal heart rate"
+            elif 100 < value <= 140:
+                return "Elevated heart rate"
+            else:
+                return "Tachycardia (high heart rate)"
+        elif target == 'stress_level':
+            if value < 3:
+                return "Low stress level"
+            elif 3 <= value <= 7:
+                return "Moderate stress level"
+            else:
+                return "High stress level"
+        else:
+            return "Normal"
+    
+    def _get_bmi_category(self, bmi):
+        """Get BMI category based on BMI value"""
+        if bmi < 18.5:
+            return "Underweight"
+        elif 18.5 <= bmi < 25:
+            return "Normal weight"
+        elif 25 <= bmi < 30:
+            return "Overweight"
+        elif 30 <= bmi < 35:
+            return "Obese (Class I)"
+        elif 35 <= bmi < 40:
+            return "Obese (Class II)"
+        else:
+            return "Extremely Obese (Class III)"
+    
+    def _get_bmi_color(self, bmi):
+        """Get color code based on BMI value"""
+        if bmi < 18.5:
+            return "#9467bd"  # Purple for underweight
+        elif 18.5 <= bmi < 25:
+            return "#5cb85c"  # Green for normal
+        elif 25 <= bmi < 30:
+            return "#f0ad4e"  # Orange for overweight
+        else:
+            return "#d9534f"  # Red for obese
+    
+    def _get_potential_health_conditions(self, target, value, temperature, eda):
+        """Get potential health conditions based on predicted values"""
+        conditions = []
+        
+        if target == 'heart_rate':
+            if value < 60:
+                conditions.append({
+                    'name': 'Bradycardia',
+                    'description': 'Lower than normal heart rate that may indicate problems with the heart\'s electrical system.',
+                    'risk_level': 'Moderate'
+                })
+            elif value > 100:
+                conditions.append({
+                    'name': 'Tachycardia',
+                    'description': 'Higher than normal heart rate that may be caused by physical activity, stress, or heart conditions.',
+                    'risk_level': 'Moderate'
+                })
+            
+            if value > 120:
+                conditions.append({
+                    'name': 'Cardiovascular Strain',
+                    'description': 'Elevated heart rate may be putting extra strain on your cardiovascular system.',
+                    'risk_level': 'Moderate'
+                })
+        
+        # Check for temperature abnormalities
+        if temperature < 36.0:
+            conditions.append({
+                'name': 'Hypothermia',
+                'description': 'Low body temperature that may indicate exposure to cold, metabolic disorders, or other conditions.',
+                'risk_level': 'Moderate'
+            })
+        elif temperature > 37.5:
+            conditions.append({
+                'name': 'Fever',
+                'description': 'Elevated body temperature that may indicate infection, inflammation, or other conditions.',
+                'risk_level': 'Moderate'
+            })
+        
+        # Check for EDA related conditions
+        if eda > 10.0:
+            conditions.append({
+                'name': 'Elevated Stress Response',
+                'description': 'Higher than normal electrodermal activity indicating increased sympathetic nervous system activity.',
+                'risk_level': 'Low'
+            })
+        
+        # Combined conditions
+        if value > 100 and temperature > 37.5:
+            conditions.append({
+                'name': 'Potential Infection',
+                'description': 'Combination of elevated heart rate and body temperature may indicate an infectious process.',
+                'risk_level': 'High'
+            })
+        
+        if value > 100 and eda > 10.0:
+            conditions.append({
+                'name': 'Anxiety/Stress Response',
+                'description': 'Combination of elevated heart rate and skin conductance suggests heightened stress or anxiety.',
+                'risk_level': 'Moderate'
+            })
+        
+        return conditions
+    
+    def _generate_recommendations(self, target, value, heart_rate, temperature, eda, age=35, gender="Male", activity_level="Lightly Active"):
+        """Generate personalized health recommendations based on predicted values"""
+        recommendations = {
+            "Lifestyle Recommendations": [],
+            "Monitoring Suggestions": [],
+            "Activity Recommendations": []
+        }
+        
+        # General recommendations
+        recommendations["Lifestyle Recommendations"].append("Stay hydrated by drinking at least 8 glasses of water daily.")
+        recommendations["Lifestyle Recommendations"].append("Maintain a balanced diet rich in fruits, vegetables, and whole grains.")
+        recommendations["Monitoring Suggestions"].append("Track your health metrics regularly to identify patterns and changes.")
+        
+        # Target-specific recommendations
+        if target == 'heart_rate':
+            if value < 60:
+                recommendations["Lifestyle Recommendations"].append("Consider discussing your low heart rate with a healthcare provider.")
+                recommendations["Monitoring Suggestions"].append("Monitor your heart rate during different activities and times of day.")
+                recommendations["Activity Recommendations"].append("Engage in light to moderate exercise to gradually improve cardiovascular fitness.")
+            
+            elif value > 100:
+                recommendations["Lifestyle Recommendations"].append("Practice stress-reduction techniques like deep breathing or meditation.")
+                recommendations["Lifestyle Recommendations"].append("Limit caffeine and stimulant intake, especially in the afternoon and evening.")
+                recommendations["Monitoring Suggestions"].append("Keep a log of activities that may trigger elevated heart rate.")
+                recommendations["Activity Recommendations"].append("Include cool-down periods after exercise to gradually lower your heart rate.")
+        
+        # Temperature recommendations
+        if temperature < 36.0:
+            recommendations["Lifestyle Recommendations"].append("Ensure you're dressed appropriately for the environment to maintain body temperature.")
+            recommendations["Monitoring Suggestions"].append("Monitor your temperature regularly, especially if you continue to feel cold.")
+        elif temperature > 37.5:
+            recommendations["Lifestyle Recommendations"].append("Rest and increase fluid intake if experiencing elevated temperature.")
+            recommendations["Monitoring Suggestions"].append("Check your temperature regularly to track any changes.")
+            recommendations["Lifestyle Recommendations"].append("Consult a healthcare provider if fever persists for more than 24 hours.")
+        
+        # Age-specific recommendations
+        if age > 50:
+            recommendations["Lifestyle Recommendations"].append("Ensure regular health check-ups, including cardiac assessments.")
+            recommendations["Monitoring Suggestions"].append("Consider more frequent blood pressure and heart rate monitoring.")
+        
+        # Activity level recommendations
+        if activity_level in ["Sedentary", "Lightly Active"]:
+            recommendations["Activity Recommendations"].append("Aim to increase physical activity gradually, targeting at least 150 minutes of moderate exercise weekly.")
+            recommendations["Activity Recommendations"].append("Incorporate more movement throughout your day, such as taking short walking breaks.")
+        elif activity_level in ["Very Active", "Extremely Active"]:
+            recommendations["Activity Recommendations"].append("Ensure adequate rest and recovery between intense workouts.")
+            recommendations["Lifestyle Recommendations"].append("Focus on proper nutrition to support your high activity level.")
+        
+        # Stress-related recommendations
+        if eda > 10.0:
+            recommendations["Lifestyle Recommendations"].append("Practice regular stress management techniques such as meditation, deep breathing, or yoga.")
+            recommendations["Lifestyle Recommendations"].append("Consider keeping a stress journal to identify triggers and patterns.")
+            recommendations["Activity Recommendations"].append("Try incorporating relaxing activities like gentle walking, swimming, or tai chi.")
+        
+        return recommendations
+    
+    def _generate_health_report(self, prediction, target_col, heart_rate, temperature, eda, conditions, recommendations, patient_info):
+        """Generate a downloadable health report"""
+        report = f"""HEALTH ASSESSMENT REPORT
+Generated on: {datetime.now().strftime('%Y-%m-%d %H:%M')}
+
+PATIENT INFORMATION
+------------------
+Age: {patient_info['age']} years
+Gender: {patient_info['gender']}
+Weight: {patient_info['weight']} kg
+Height: {patient_info['height']} cm
+Activity Level: {patient_info['activity_level']}
+
+PREDICTED HEALTH METRICS
+-----------------------
+{target_col.replace('_', ' ').title()}: {prediction:.2f}
+Heart Rate: {heart_rate:.1f} BPM
+Body Temperature: {temperature:.1f} °C
+Electrodermal Activity: {eda:.1f} μS
+
+HEALTH STATUS
+------------
+{self._get_health_status_text(target_col, prediction)}
+
+POTENTIAL HEALTH CONDITIONS
+-------------------------
+"""
+        if conditions:
+            for condition in conditions:
+                report += f"• {condition['name']} (Risk Level: {condition['risk_level']})\n  {condition['description']}\n\n"
+        else:
+            report += "No specific health concerns identified based on the provided metrics.\n\n"
+        
+        report += "RECOMMENDATIONS\n---------------\n"
+        
+        for category, recs in recommendations.items():
+            report += f"\n{category}:\n"
+            for rec in recs:
+                report += f"• {rec}\n"
+        
+        report += "\n\nDISCLAIMER\n----------\nThis report is generated based on predicted values and provided information. It is not a medical diagnosis. Always consult with a healthcare professional for personalized medical advice."
+        
+        return report
 
 # Add Ngrok setup function
 def setup_ngrok():
