@@ -9,6 +9,7 @@ import json
 import time
 import matplotlib.pyplot as plt
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from pyngrok import ngrok
 
 # Suppress warnings
 warnings.filterwarnings('ignore')
@@ -314,4 +315,7 @@ if __name__ == "__main__":
      .evaluate_model()
      .plot_training_history()
      .save_model()
-    ) 
+    )
+
+    # Set ngrok authentication token
+    ngrok.set_auth_token("2uX0aCJoUZuNzfrCZVC3lsvOh5V_4iryQ4V9XANNDiGzrokMH") 

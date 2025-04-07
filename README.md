@@ -1,22 +1,21 @@
 # AI-Based Health Tracker
 
-An AI-driven health tracking application that uses machine learning to monitor, analyze, and predict health metrics from wearable device data.
+An AI-driven health tracking application that uses deep learning to monitor, analyze, and predict health metrics from wearable device data.
 
 ## Overview
 
-This application processes health metric data (heart rate, electrodermal activity, temperature, etc.) collected from wearable devices and uses machine learning models to analyze trends, identify patterns, and make predictions. The interactive Streamlit dashboard provides visualizations of health data, personalized predictions, and health recommendations based on the analyzed data.
+This application processes health metric data (heart rate, electrodermal activity, temperature, etc.) collected from wearable devices and uses neural networks to analyze trends, identify patterns, and make predictions. The interactive Streamlit dashboard provides visualizations of health data, personalized predictions, and health recommendations based on the analyzed data.
 
 ## Features
 
-- **Data Integration**: Loads and merges health metrics from multiple data sources (HR, EDA, TEMP, BVP)
-- **Automated Preprocessing**: Cleans, normalizes, and transforms raw health data for analysis
-- **Feature Engineering**: Creates relevant derived features from time-series health data
-- **Adaptive Model Selection**: Automatically selects the appropriate model type (neural network or scikit-learn) based on system compatibility
-- **Missing Value Handling**: Automatically detects and imputes missing values in the dataset
-- **Interactive Dashboard**: Visualizes health metrics with dynamic charts and graphs
-- **Real-time Predictions**: Makes predictions based on user-input health parameters
-- **Health Insights**: Provides summary statistics and trend analysis of health data
-- **Modern UI**: Clean, responsive interface with intuitive navigation and clear data presentation
+- **Neural Network Model**: Uses TensorFlow/Keras for advanced health metric predictions
+- **Interactive Dashboard**: Real-time visualization of health metrics with dynamic charts
+- **Personalized Health Analysis**: Provides health status assessment and recommendations
+- **Stress Level Analysis**: Monitors and analyzes stress levels using EDA data
+- **Activity Tracking**: Tracks and categorizes different physical activities
+- **BMI Calculator**: Calculates and tracks Body Mass Index with health recommendations
+- **Remote Access**: Supports ngrok tunneling for remote access to the dashboard
+- **GPU Acceleration**: Supports Metal GPU acceleration for macOS users
 
 ## Project Structure
 
@@ -217,16 +216,3 @@ The model is evaluated using several metrics:
 - Support for additional health metrics
 - Enhanced neural network architectures with LSTM layers for time-series analysis
 
-## License
-
-This project is licensed under the MIT License - see the LICENSE file for details.
-
-## Acknowledgments
-
-- Health dataset providers
-- Streamlit for the interactive dashboard framework
-- The open-source ML community for tools and libraries
-
-## Contact
-
-For questions or support, please contact: [your-email@example.com]

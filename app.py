@@ -1494,19 +1494,80 @@ POTENTIAL HEALTH CONDITIONS
 
 # Add Ngrok setup function
 def setup_ngrok():
+    # Check if app is already running on ngrok
+    try:
+        # Get the current URL from environment variables
+        host = os.environ.get('SERVER_HOST', '')
+        
+        # If we're already on ngrok, don't create a new tunnel
+        if 'ngrok' in host:
+            print(f"Already running on ngrok URL: {host}")
+            return host
+            
+        # Try checking via Streamlit's experimental get_query_params
+        try:
+            import streamlit.web.server.server as server
+            # Check if current server has ngrok in the baseUrl
+            if hasattr(server, 'get_base_url_hostname'):
+                hostname = server.get_base_url_hostname()
+                if 'ngrok' in hostname:
+                    print(f"Already running on ngrok hostname: {hostname}")
+                    return f"https://{hostname}"
+        except Exception as e:
+            print(f"Could not check Streamlit server hostname: {e}")
+    except Exception as e:
+        print(f"Error checking if running on ngrok: {e}")
+    
     # Set up ngrok tunnel to expose the Streamlit app
     try:
+        # Set auth token
+        ngrok.set_auth_token("2uX0aCJoUZuNzfrCZVC3lsvOh5V_4iryQ4V9XANNDiGzrokMH")
+        
         # Get the port that Streamlit is running on
-        port = int(sys.argv[sys.argv.index("--server.port") + 1])
-    except (ValueError, IndexError):
-        port = 8501  # Default Streamlit port
-    
-    # Open a ngrok tunnel to the Streamlit port
-    public_url = ngrok.connect(port).public_url
-    print(f" * ngrok tunnel available at: {public_url}")
-    return public_url
+        try:
+            port = int(sys.argv[sys.argv.index("--server.port") + 1])
+        except (ValueError, IndexError):
+            port = 8501  # Default Streamlit port
+        
+        # Check if ngrok is already running on this port by listing tunnels
+        existing_tunnels = ngrok.get_tunnels()
+        for tunnel in existing_tunnels:
+            if f":{port}" in tunnel.config['addr']:
+                print(f"Found existing ngrok tunnel for port {port}: {tunnel.public_url}")
+                return tunnel.public_url
+        
+        # Open a ngrok tunnel to the Streamlit port
+        public_url = ngrok.connect(port).public_url
+        print(f" * ngrok tunnel available at: {public_url}")
+        return public_url
+    except Exception as e:
+        print(f"Error setting up ngrok: {e}")
+        # Return None to indicate tunneling failed
+        return None
 
 if __name__ == "__main__":
-    # Initialize and run the app
+    # Initialize the app
     app = HealthTrackerApp()
+    
+    # Setup ngrok tunnel if not already on ngrok
+    public_url = setup_ngrok()
+    
+    # Display appropriate message based on access method
+    if public_url:
+        if 'ngrok' in public_url:
+            # We either created a new tunnel or detected an existing one
+            st.sidebar.success(f"Ngrok tunnel available at: {public_url}")
+        else:
+            # We're already running on ngrok
+            st.sidebar.info("You're accessing the app through an ngrok tunnel.")
+    else:
+        st.sidebar.warning(
+            "Failed to create ngrok tunnel. This app is only accessible locally at http://localhost:8501.\n\n"
+            "To fix ngrok issues:\n"
+            "1. Ensure you don't have other ngrok sessions running\n"
+            "2. Check your ngrok authentication\n"
+            "3. Try using a custom authtoken if you have one"
+        )
+    
+    # Run the app
     app.run() 
