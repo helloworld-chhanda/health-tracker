@@ -22,18 +22,12 @@ This application processes health metric data (heart rate, electrodermal activit
 ```
 health_tracker/
 ├── app.py                   # Streamlit dashboard application
-├── data_preprocessing.py    # Data loading and preprocessing module
-├── model.py                 # Machine learning model training module
-├── main.py                  # Main script to run the full pipeline
-├── setup.sh                 # Setup script for dependencies
+├── model.py                 # Neural network model training module
 ├── requirements.txt         # Python dependencies
-├── HR.csv                   # Heart rate data
-├── EDA.csv                  # Electrodermal activity data
-├── TEMP.csv                 # Temperature data
-├── BVP.csv                  # Blood volume pulse data
-├── IBI.csv                  # Inter-beat interval data
-├── ACC.csv                  # Accelerometer data
-├── info.txt                 # Information about the dataset
+├── data/                    # Directory for raw data files
+│   ├── HR.csv               # Heart rate data
+│   ├── EDA.csv              # Electrodermal activity data
+│   └── TEMP.csv             # Temperature data
 ├── processed_data/          # Directory for processed data files
 │   ├── X_train.npy          # Training features
 │   ├── X_test.npy           # Testing features
@@ -43,48 +37,37 @@ health_tracker/
 │   ├── target_col.csv       # Name of target column
 │   ├── scaler.pkl           # Fitted scaler for normalization
 │   └── imputer.pkl          # Fitted imputer for handling missing values
-├── saved_models/            # Directory for trained models
-│   ├── health_model.pkl     # Trained scikit-learn model
-│   ├── health_model.h5      # Trained neural network model (if available)
-│   ├── feature_info.json    # Feature information for the model
-│   ├── metrics.json         # Model evaluation metrics
-│   └── figures/             # Model visualizations and performance plots
-└── visualizations/          # Directory for data visualizations
+└── saved_models/            # Directory for trained models
+    ├── health_model.h5      # Trained neural network model
+    ├── best_model.h5        # Best model checkpoint during training
+    ├── feature_info.json    # Feature information for the model
+    ├── metrics.json         # Model evaluation metrics
+    └── figures/             # Model visualizations and performance plots
+        ├── training_history.png  # Training and validation metrics
+        └── predictions.png       # Actual vs predicted values
 ```
 
 ## Technical Details
 
-### Data Processing Pipeline
+### Neural Network Architecture
 
-1. **Data Loading**: Imports data from CSV files containing different health metrics
-2. **Data Merging**: Combines data from multiple sources using timestamp alignment
-3. **Data Cleaning**: Handles missing values, removes outliers, and normalizes data
-4. **Feature Creation**: Generates time-based features and rolling statistics
-5. **Data Preparation**: Splits data into training and testing sets for modeling
-
-### Machine Learning Model
-
-The application uses an adaptive model selection approach:
-
-- **Primary Option**: Neural Network with TensorFlow/Keras (when available)
-- **Fallback Option**: Linear Regression Model from scikit-learn (when TensorFlow is not available)
-
-Key model features:
-- Automatic missing value imputation
-- Feature importance analysis
-- Comprehensive performance metrics (MAE, MSE, RMSE, R²)
-- Model persistence for future predictions
-- Visualization of model performance
+The model uses a deep neural network with:
+- 3 Dense layers (128, 64, 32 neurons)
+- Batch Normalization for each layer
+- Dropout layers for regularization (0.3, 0.2, 0.2)
+- Adam optimizer with learning rate reduction
+- Early stopping to prevent overfitting
+- Mean Squared Error loss function
 
 ### Interactive Dashboard
 
 The Streamlit dashboard provides:
 
-- **Dashboard Overview**: Summary statistics and key health metrics visualization
-- **Data Explorer**: Interactive tools to analyze health data patterns
-- **Predictions**: Interface to input health parameters and receive predictions with visual representation
-- **Model Information**: Details about the model architecture, performance, and feature importance
-- **Settings**: Application configuration options
+- **Dashboard Page**: Overview of key health metrics with interactive visualizations
+- **Predictions Page**: Make predictions using the trained neural network model
+- **Upload Data Page**: Interface for uploading and processing new health data
+- **Model Info Page**: View model architecture, performance metrics, and feature importance
+- **About Page**: Information about the application and its features
 
 ## Installation
 
@@ -94,85 +77,24 @@ git clone https://github.com/yourusername/health_tracker.git
 cd health_tracker
 ```
 
-2. Set up the environment (Option 1 - using setup script):
-```bash
-chmod +x setup.sh
-./setup.sh
-```
-
-Or install dependencies manually (Option 2):
+2. Install dependencies:
 ```bash
 pip install -r requirements.txt
 ```
 
-For macOS users who want to use TensorFlow with GPU acceleration (optional):
+For macOS users with GPU support:
 ```bash
 pip install tensorflow-macos tensorflow-metal
 ```
 
 ## Usage
 
-### Running the Complete Pipeline
-
-To run the complete pipeline (preprocessing, training, and launching the Streamlit app):
-
-```bash
-python main.py
-```
-
-### Command Line Options
-
-The `main.py` script supports the following options:
-
-- `--skip-preprocess`: Skip data preprocessing stage
-- `--skip-train`: Skip model training stage
-- `--skip-app`: Skip running the Streamlit app
-- `--use-ngrok`: Use ngrok to expose the Streamlit app publicly (requires pyngrok)
-
-Example:
-```bash
-# Run only the Streamlit app with ngrok tunnel
-python main.py --skip-preprocess --skip-train --use-ngrok
-```
-
-### Running Components Separately
-
-To run individual components:
-
-1. Data Preprocessing:
-```bash
-python data_preprocessing.py
-```
-
-2. Model Training:
-```bash
-python model.py
-```
-
-3. Streamlit App:
+Run the Streamlit app:
 ```bash
 streamlit run app.py
 ```
 
-## Data Description
-
-The application uses health metric data with the following components:
-
-- **HR.csv**: Heart rate measurements in beats per minute (BPM)
-- **EDA.csv**: Electrodermal activity data measuring skin conductance (µS)
-- **TEMP.csv**: Body temperature measurements (°C)
-- **BVP.csv**: Blood volume pulse measurements
-- **IBI.csv**: Inter-beat interval data measuring time between heartbeats (ms)
-- **ACC.csv**: Accelerometer data measuring physical movement
-
-## Performance Metrics
-
-The model is evaluated using several metrics:
-
-- **MAE (Mean Absolute Error)**: Average absolute difference between predictions and actual values
-- **MSE (Mean Squared Error)**: Average squared difference between predictions and actual values
-- **RMSE (Root Mean Squared Error)**: Square root of MSE, providing error in the same units as the target
-- **R² (Coefficient of Determination)**: Proportion of variance in the dependent variable explained by the model
+The app will automatically create an ngrok tunnel if possible.
 
 ## Requirements
 
@@ -184,27 +106,26 @@ The model is evaluated using several metrics:
 - scikit-learn==1.3.0
 - streamlit==1.25.0
 - plotly==5.15.0
-- pyngrok==6.0.0 (optional, for ngrok tunneling)
+- pyngrok==6.0.0
 - joblib==1.3.1
-- tensorflow==2.13.0 (optional, for neural network models)
-- tensorflow-macos==2.13.0 (optional, for macOS users)
-- tensorflow-metal==1.0.0 (optional, for macOS GPU acceleration)
-- keras==2.13.1 (optional, for neural network models)
+- tensorflow==2.13.0
+- tensorflow-macos==2.13.0 (for macOS users)
+- tensorflow-metal==1.0.0 (for macOS GPU acceleration)
 
 ## Troubleshooting
 
-- **Model Selection**: The application will automatically detect if TensorFlow/Keras is available on your system. If not available, it will fall back to using a scikit-learn model, which has fewer dependencies but still provides excellent performance.
+- **GPU Support**: The app automatically detects and configures GPU support for macOS users.
 
-- **Missing Values**: The application now automatically detects and handles missing values in the dataset using imputation. No manual preprocessing is needed.
+- **Ngrok Tunneling**: The app handles ngrok authentication and checks for existing tunnels before creating new ones. If you encounter the "limited to 1 simultaneous ngrok agent sessions" error, the app will continue to run locally.
+
+- **Missing Values**: The application automatically detects and handles missing values in the dataset using imputation.
 
 - **TensorFlow on macOS**: For macOS users, we recommend using the `tensorflow-macos` and `tensorflow-metal` packages for better compatibility with Apple hardware:
   ```bash
   pip install tensorflow-macos tensorflow-metal
   ```
 
-- **Model Loading Errors**: If the dashboard cannot load a model, it will now attempt to load an alternative model type (e.g., if `.h5` neural network model fails, it will try the `.pkl` scikit-learn model).
-
-- **Data Processing Errors**: Check that all required CSV files are present in the project directory.
+- **Data Processing Errors**: Check that all required CSV files are present in the data directory.
 
 ## Future Enhancements
 
